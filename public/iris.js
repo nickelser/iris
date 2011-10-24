@@ -86,7 +86,7 @@
   * NB: messages are not sent back to the client that initially sent them
   */
   Iris.prototype.publish = function(channel, message) {
-    if (channel.length > 0 && message.length > 0) {
+    if (channel.length > 0) {
       this._deferred_messages.push({chan: channel, pub: message});
     }
     

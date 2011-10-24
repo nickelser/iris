@@ -61,6 +61,7 @@ class Client
   
   def unsubscribe(channel_names)
     # no need for auth checks here, channels only added if they are auth'd
+    logger.debug "client(#{@id}) unsubscribed from: #{channel_names}"
     channel_names.split(',').each do |channel_name|
       if @channels.has_key?(channel_name)
         @sub.unsubscribe(namespace + channel_name)
@@ -83,7 +84,6 @@ class Client
   
   def init_sub
     @sub.on(:message) do |channel, json_message|
-      logger.debug "message (client: #{@id}) (chan: #{channel}): #{json_message}"
       begin
         message = JSON.parse(json_message)
         real_message = {}
@@ -101,9 +101,12 @@ class Client
           real_message = message # if no __client_id, probably sent 'out of band', so foward it on with due dilligence
         end
         
+        logger.debug "message (client: #{@id}) (chan: #{channel}): #{real_message.inspect}"
+        
         unless real_message.empty?
           # and send it to the aggregator (will pass-through if necessary)
           @aggregators[channel].add(real_message) do |msg|
+            logger.debug "sending to client(#{@id}) on channel(#{channel}): #{msg.inspect}"
             @ws.send({chan: channel, msg: msg}.to_json)
           end
         end
