@@ -11,16 +11,12 @@ GEM
     daemon-spawn (0.4.2)
     em-hiredis (0.1.0)
       hiredis (~> 0.3.0)
-    em-http-request (0.3.0)
-      addressable (>= 2.0.0)
-      escape_utils
-      eventmachine (>= 0.12.9)
     em-websocket (0.3.3)
       addressable (>= 2.1.1)
       eventmachine (>= 0.12.9)
-    escape_utils (0.2.4)
     eventmachine (0.12.10)
     hiredis (0.3.2)
+    ruby-hmac (0.4.0)
 
 PLATFORMS
   ruby
@@ -28,6 +24,6 @@ PLATFORMS
 DEPENDENCIES
   daemon-spawn
   em-hiredis
-  em-http-request
   em-websocket
+  ruby-hmac
   stream_logger!

@@ -7,7 +7,6 @@ $:.unshift File.join(root_dir, "lib")
 require 'eventmachine'
 require 'em-websocket'
 require 'em-hiredis'
-require 'em-http-request'
 
 require 'daemon_spawn'
 require 'yaml'
@@ -26,25 +25,12 @@ defaults = {
   namespace: "development",
   host: "0.0.0.0",
   port: 8080,
-  auth_mechanism: "",
-  auth_endpoint: "",
-  auth_redis_key: "",
-  auth_user_token_cache: "__user_tokens",
   log_level: "info",
   websockets_debug: false,
   aggregation_time: 1.5 # in seconds
 }
 
 CONFIG = defaults.merge! Hash[*(YAML.load(IO.read("#{root_dir}/iris.yml"))[RUN_ENV]).map { |k,v| [ k.to_sym, v ] }.flatten]
-
-# some sanity checking
-if ![nil, "", "endpoint", "redis"].include?(CONFIG[:auth_mechanism])
-  throw "Invalid authentication mechanism; must be one of '', 'endpoint' or 'redis'!"
-elsif CONFIG[:auth_mechanism] == "endpoint" && CONFIG[:auth_endpoint].empty?
-  throw "Authentication set to endpoint, but no endpoint specified!"
-elsif CONFIG[:auth_mechanism] == "redis" && CONFIG[:auth_redis_key].empty?
-  throw "Authentication set to redis, but no table key specified!"
-end
 
 def namespace
   if CONFIG[:namespace].empty?
