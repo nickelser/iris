@@ -2,6 +2,8 @@ development:
   uri: redis://127.0.0.1:6379/0
   namespace: development
   log_level: debug
+  auth: true
+  secret: "1234"
 
 test: 
   uri: redis://127.0.0.1:6379/0
@@ -10,5 +12,4 @@ test:
 production:
   uri: redis://127.0.0.1:6379/0
   namespace: production
-  auth_mechanism: endpoint
-  auth_endpoint: http://example.com/iris_auth
+  auth: true

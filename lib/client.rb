@@ -9,7 +9,6 @@ class Client
     @ws = ws
     @id = HMAC::SHA256.hexdigest(CONFIG[:secret], Time.now.to_i.to_s + (@@id_counter += 1).to_s)[0..16]
     @channels = {}
-    @aggregators = {}
     @cached_tokens = {}
     
     # instead of trying to reconnect to redis, which is fragile, just disconnect the user (who will attempt to reconnect)
@@ -19,6 +18,7 @@ class Client
     # send out the client's id
     @ws.send({id: @id}.to_json)
     
+    # and initialize the subscription handler!
     init_sub
   end
   
@@ -31,8 +31,8 @@ class Client
     @sub.close_connection
   end
   
-  def publish(channel, msg, tokens)
-    if authorized([channel], tokens, :publish)
+  def publish(channel, msg, token)
+    if authorized([channel], token)
       logger.debug "sending message: #{msg}"
       # wrap the message with our client id so we don't publish to ourselves
       @pub.publish(namespace + channel, {'msg' => msg, '__client_id' => @id}.to_json)
@@ -41,35 +41,32 @@ class Client
   
   # subscribe to a channel
   def subscribe(channel, token, aggregator_name='')
-    if authorized(channel, token, :subscribe)
+    if authorized(channel, token)
       logger.debug "client #{@id} subscribed to: #{channel}"
       unless channel.empty? || @channels.has_key?(channel)
         @sub.subscribe(namespace + channel)
-        @channels[channel] = true
-        @aggregators[channel] = Aggregator.new(aggregator_name) # will be pass-through if blank
+        @channels[channel] = Aggregator.new(aggregator_name) # will be pass-through if blank
       end
     end
   end
   
   def unsubscribe(channel, token)
-    if authorized(channel, token, :unsubscribe)
+    if authorized(channel, token)
       logger.debug "client(#{@id}) unsubscribed from: #{channel}"
       if @channels.has_key?(channel)
         @sub.unsubscribe(namespace + channel)
         @channels.delete(channel)
-        @aggregators.delete(channel)
       end
     end
   end
   
   private
   
-  def authorized(channel, token, action)
-    return true if !CONFIG[:auth]
-    return generate_token(c) == token
+  def authorized(channel, token)
+    CONFIG[:auth] ? (token_for_channel(channel) == token) : true
   end
   
-  def generate_token(channel)
+  def token_for_channel(channel)
     @cached_tokens[channel] ||= HMAC::SHA256.hexdigest(CONFIG[:secret], "#{channel}:#{@id}")
   end
   
@@ -96,7 +93,7 @@ class Client
         
         unless real_message.empty?
           # and send it to the aggregator (will pass-through if necessary)
-          @aggregators[channel].add(real_message) do |msg|
+          @channels[channel].add(real_message) do |msg|
             logger.debug "sending to client(#{@id}) on channel(#{channel}): #{msg.inspect}"
             @ws.send({chan: channel, msg: msg}.to_json)
           end

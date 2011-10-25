@@ -117,10 +117,9 @@
         real_agg = aggregator;
       }
       
-      this._subscriptions[channel] = {callbacks: [], agg: real_agg};
+      this._subscriptions[channel] = {callbacks: [callback], agg: real_agg};
       
       this._authorize(channel, function() {
-        that._subscriptions[channel].callbacks.push(callback);
         that._send(channel, {sub: channel, agg: real_agg});
         _debug("_subscribe", "subscribed to: ", channel, " with aggregator: ", real_agg);
       });
@@ -230,8 +229,8 @@
         return;
       }
       
-      var that = this;
-      var xhr = window.XMLHttpRequest ? new XMLHttpRequest() : new ActiveXObject("Microsoft.XMLHTTP");
+      var that = this,
+          xhr = window.XMLHttpRequest ? new XMLHttpRequest() : new ActiveXObject("Microsoft.XMLHTTP");
       
       xhr.open("POST", this._endpoint, true);
       xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
@@ -292,6 +291,6 @@
      if (window._iris_debug && window.console && (typeof console.log === "function")) {
        // make arguments bend to my will
        console.log.apply(console, ["iris_debug(" + Array.prototype.slice.call(arguments)[0] + "): "].concat(Array.prototype.slice.call(arguments, 1)));
-      }
+     }
    }
 })();
