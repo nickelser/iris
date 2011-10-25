@@ -14,6 +14,7 @@ require 'yaml'
 require 'json'
 require 'time'
 require 'stream_logger'
+require 'hmac-sha2'
 
 require 'aggregator'
 require 'client'
@@ -91,14 +92,12 @@ class IrisServer < DaemonSpawn::Base
           begin
             msg = JSON.parse(msg)
             
-            if msg.has_key? 'auth'
-              clients[ws].authenticate(msg['auth'], msg['token'])
-            elsif msg.has_key? 'sub'
-              clients[ws].subscribe(msg['sub'], msg['agg'])
+            if msg.has_key? 'sub'
+              clients[ws].subscribe(msg['sub'], msg['a'], msg['agg'])
             elsif msg.has_key?('pub') && msg.has_key?('chan')
-              clients[ws].publish(msg['chan'], msg['pub'])
+              clients[ws].publish(msg['chan'], msg['pub'], msg['a'])
             elsif msg.has_key? 'unsub'
-              clients[ws].unsubscribe(msg['unsub'])
+              clients[ws].unsubscribe(msg['unsub'], msg['a'])
             end
           rescue JSON::ParserError
             # consume these

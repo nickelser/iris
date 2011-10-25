@@ -10,29 +10,30 @@
   window.WEB_SOCKET_SWF_LOCATION = "WebSocketMain.swf";
   window.WEB_SOCKET_DEBUG = window._iris_debug;
   
-  window.Iris = function(url, user_id, user_token, protocols, proxyHost, proxyPort, headers) {
+  window.Iris = function(url, endpoint, protocols, proxyHost, proxyPort, headers) {
     var that = this;
     
     this._subscriptions = {};
+    this._auth_tokens = {};
     this._deferred_messages = [];
-    
-    this._user_id = user_id;
-    this._user_token = user_token;
     
     this._url = url;
     this._protocols = protocols;
     this._proxyHost = proxyHost;
     this._proxyPort = proxyPort;
     this._headers = headers;
+    this._endpoint = endpoint;
     
     this._retry_timeout = 1000; // start it at one second, then back off
+    
+    _debug("iris", "iris initialized; url: ", url, " endpoint: ", endpoint);
     
     this._open_socket();
   };
   
   /*
   * pass a string to subscribe to one channel
-  * or an array to subscribe to many
+  * or an array to subscribe to multiple
   * aggregator is an optional string parameter specifying which aggregtion recipe to use, if any
   * valid aggregators are 'additive', 'diff' and 'throttle'
   * if you have already specified an aggregator (or lack thereof), you cannot do so again
@@ -43,15 +44,10 @@
         return;
       }
       for (var i = 0; i < channels.length; i++) {
-        this._add_callback_to_channel(callback, channels[i], aggregator);
+        this._subscribe(callback, channels[i], aggregator);
       }
     } else {
-      this._add_callback_to_channel(callback, channels, aggregator);
-    }
-    
-    // if not authenticated, the onmessage after auth will take care of subscriptions
-    if (this._authenticated) {
-      this._subscribe();
+      this._subscribe(callback, channels, aggregator);
     }
   };
   
@@ -60,18 +56,12 @@
   * this will cancel *all* callbacks for that channel
   */
   Iris.prototype.unsubscribe = function(channels) {
-    var unsub_list = [];
-    
     if (is_array(channels)) {
       for (var i = 0; i < channels.length; i++) {
-        this._unsubscribe(channels[i], unsub_list);
+        this._unsubscribe(channels[i]);
       }
     } else {
-      this._unsubscribe(channels, unsub_list);
-    }
-    
-    if (unsub_list.length > 0 && this._authenticated) {
-      this._send({unsub: unsub_list.join(',')});
+      this._unsubscribe(channels);
     }
     
     _debug("unsubscribe", "after unsub, state: ", this._subscriptions);
@@ -90,9 +80,11 @@
       this._deferred_messages.push({chan: channel, pub: message});
     }
     
-    if (this._authenticated) {
-      this._publish();
-    }
+    var that = this;
+    
+    this._authorize(channel, function() {
+      that._publish();
+    });
   };
   
   /* internal methods follow */
@@ -100,72 +92,59 @@
   Iris.prototype._publish = function() {
     while (this._deferred_messages.length > 0) {
       var msg = this._deferred_messages.pop();
-      this._send(msg);
+      this._send(msg.chan, msg);
       _debug("_publish", "sent: ", msg);
     }
   };
   
-  Iris.prototype._unsubscribe = function(channel, unsub_list) {
+  Iris.prototype._unsubscribe = function(channel) {
     if (channel in this._subscriptions) {
-      if (this._subscriptions[channel].has_subscribed) {
-        unsub_list.push(channel);
-      }
-      
-      delete this._subscriptions[channel];
+      var that = this;
+      this._authorize(channel, function() {
+        that._send(channel, {unsub: channel});
+        delete that._subscriptions[channel];
+      });
     }
   };
   
-  Iris.prototype._add_callback_to_channel = function(callback, channel, aggregator) {
+  Iris.prototype._subscribe = function(callback, channel, aggregator) {
     if (channel in this._subscriptions) {
       this._subscriptions[channel].callbacks.push(callback);
     } else {
-      var real_agg = "";
+      var real_agg = "", that = this;
       
       if (aggregator !== undefined) {
         real_agg = aggregator;
       }
       
-      this._subscriptions[channel] = {agg: real_agg, callbacks: [callback], has_subscribed: false};
+      this._subscriptions[channel] = {callbacks: [], agg: real_agg};
+      
+      this._authorize(channel, function() {
+        that._subscriptions[channel].callbacks.push(callback);
+        that._send(channel, {sub: channel, agg: real_agg});
+        _debug("_subscribe", "subscribed to: ", channel, " with aggregator: ", real_agg);
+      });
     }
   };
   
-  Iris.prototype._subscribe = function() {
-    var to_subscribe = {};
-    
-    // collect channels by aggregation type
+  Iris.prototype._resubscribe = function() {
     for (channel in this._subscriptions) {
-      if (this._subscriptions.hasOwnProperty(channel) && !this._subscriptions[channel].has_subscribed) {
-        if (this._subscriptions[channel].agg in to_subscribe) {
-          to_subscribe[this._subscriptions[channel].agg].push(channel);
-        } else {
-          to_subscribe[this._subscriptions[channel].agg] = [channel];
-        }
-        
-        this._subscriptions[channel].has_subscribed = true;
+      if (this.hasOwnProperty(channel)) {
+        var that = this;
+        this._authorize(channel, function() {
+          that._send(channel, {sub: channel, agg: that._subscriptions[channel].agg});
+        });
       }
     }
-    
-    // and actually send the subscriptions
-    // we collect by aggregation type so we can do batch subscriptions
-    if (obj_size(to_subscribe) > 0) {
-      for (agg in to_subscribe) {
-        if (to_subscribe.hasOwnProperty(agg)) {
-          var sub_str = to_subscribe[agg].join(',');
-          this._send({sub: sub_str, agg: agg});
-          _debug("_subscribe", "subscribed to: ", sub_str, " with aggregator: ", agg);
-        }
-      }
-    }
-    
-    _debug("_subscribe", "subscription state now: ", this._subscriptions);
   };
   
   Iris.prototype._open_socket = function() {
     var that = this;
     
-    this._authenticated = false;
-    this._authenticating = false;
     this._connected = false;
+    this._id = null;
+    this._auth_tokens = {};
+    this._authorizing = {};
     
     this.__ws = new WebSocket(this._url, this._protocols, this._proxyHost, this._proxyPort, this._headers);
     
@@ -177,30 +156,22 @@
   };
   
   Iris.prototype._handle_onopen = function(e) {
-    this._send({auth: this._user_id, token: this._user_token});
-    this._authenticating = true;
-    this._connected = true;
     this._retry_timeout = 1000; // reset the timeout
-    
     _debug("_handle_onopen", "connection opened");
   };
   
   Iris.prototype._handle_onclose = function(e) {
     var that = this;
     
-    // immediately set these
+    // immediately set this
     this._connected = false;
-    this._authenticated = false;
-    this._authenticating = false;
+    
+    // and clear our tokens (they won't be valid any more)
+    this._auth_tokens = {};
+    // and any pending authorizors
+    this._authorizing = {};
     
     delete this.__ws;
-    
-    // ensure all of the subscription calls are cleared
-    for (channel in this._subscriptions) {
-      if (this._subscriptions.hasOwnProperty(channel)) {
-        this._subscriptions[channel].has_subscribed = false;
-      }
-    }
     
     _debug("_handle_onclose", "connection closed, will attempt to reopen in "+this._retry_timeout/1000+"s");
     
@@ -209,6 +180,9 @@
     // limit retry wait to 32s
     if (this._retry_timeout < 32000) {
       this._retry_timeout *= 2;
+    } else {
+      // crush any pending messages, they aren't going to be delivered any time soon
+      this._deferred_messages.length = 0;
     }
   };
   
@@ -216,30 +190,88 @@
     var data = JSON.parse(e.data);
     _debug("_handle_onmessage", "message: ", data);
     
-    if (this._authenticating) {
-      if (data.auth) {
-        this._authenticating = false;
-        this._authenticated = true;
-        
-        // now do our deferred subs and pubs
-        // unsubs are handled more gracefully
-        this._subscribe();
-        this._publish();
-      } else {
-        this._authenticating = false;
-        console.log("authentication failed!");
+    if (!this._connected) {
+      if (!data.id) {
+        _debug("_handle_onmessage", "expected my id, instead got nothing");
+        return;
       }
-    } else if (this._authenticated && data.hasOwnProperty('chan') && data.hasOwnProperty('msg') && this._subscriptions.hasOwnProperty(data.chan)) {
+      
+      this.__id = data.id;
+      var that = this;
+      
+      _debug("_handle_onmessage", "received my id: ", data.id, " now attempting to authorize");
+      
+      this._authorize('', function() {
+        that._connected = true;
+        
+        that._resubscribe(); // sub to existing channels
+        that._publish(); // and automagically pub pending messages
+      });
+    } else if (data.hasOwnProperty('chan') && data.hasOwnProperty('msg') && this._subscriptions.hasOwnProperty(data.chan)) {
       for (var i = 0; i < this._subscriptions[data.chan].callbacks.length; i++) {
         this._subscriptions[data.chan].callbacks[i](data.msg, data.chan);
       }
     }
   };
   
-  Iris.prototype._send = function(data) {
-    this.__ws.send(JSON.stringify(data));
+  Iris.prototype._authorize = function(channel, callback) {
+    if (this._auth_tokens[channel] === false) {
+      // failed
+      _debug("_authorize", "attempted call to authorize after already failed!");
+      return;
+    } else if (this._auth_tokens[channel]) {
+      if (callback) { callback(); }
+    } else if (this._authorizing[channel]) {
+      if (callback) { this._authorizing[channel].push(callback); }
+    } else {
+      if (!this._endpoint && callback) {
+        _debug("_authorize", "no endpoint specified, assuming no auth!");
+        callback();
+        return;
+      }
+      
+      var that = this;
+      var xhr = window.XMLHttpRequest ? new XMLHttpRequest() : new ActiveXObject("Microsoft.XMLHTTP");
+      
+      xhr.open("POST", this._endpoint, true);
+      xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+      
+      this._authorizing[channel] = [callback];
+      
+      xhr.onreadystatechange = function() {
+        if (xhr.readyState == 4){
+          if (xhr.status == 200) {
+            _debug("_authorize", "authorized!");
+            var auth = JSON.parse(xhr.responseText);
+            that._auth_tokens[channel] = auth.token;
+            
+            for (var i = 0; i < that._authorizing[channel].length; i++) {
+              that._authorizing[channel][i]();
+            }
+            
+            delete that._authorizing[channel];
+          } else {
+            _debug("_authorize", "authorize failed!");
+            that._auth_tokens[channel] = false;
+          }
+        }
+      };
+      
+      xhr.send('channel=' + channel +'&id=' + this.__id);
+    }
   };
   
+  Iris.prototype._send = function(channel, data) {
+    if (this._endpoint) {
+      data.a = this._auth_tokens[channel];
+    }
+    
+    this.__send(data);
+  };
+  
+  Iris.prototype.__send = function(data) {
+    this.__ws.send(JSON.stringify(data));
+  };
   
   /* utility fns */
   function obj_size(obj) {
