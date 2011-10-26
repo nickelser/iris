@@ -82,7 +82,7 @@
     
     var that = this;
     
-    this._authorize(channel, function() {
+    this._authorize(channel, 'pub', function() {
       that._publish();
     });
   };
@@ -92,7 +92,7 @@
   Iris.prototype._publish = function() {
     while (this._deferred_messages.length > 0) {
       var msg = this._deferred_messages.pop();
-      this._send(msg.chan, msg);
+      this._send(msg.chan, 'pub', msg);
       _debug("_publish", "sent: ", msg);
     }
   };
@@ -100,8 +100,8 @@
   Iris.prototype._unsubscribe = function(channel) {
     if (channel in this._subscriptions) {
       var that = this;
-      this._authorize(channel, function() {
-        that._send(channel, {unsub: channel});
+      this._authorize(channel, 'sub', function() {
+        that._send(channel, 'sub', {unsub: channel});
         delete that._subscriptions[channel];
       });
     }
@@ -119,8 +119,8 @@
       
       this._subscriptions[channel] = {callbacks: [callback], agg: real_agg};
       
-      this._authorize(channel, function() {
-        that._send(channel, {sub: channel, agg: real_agg});
+      this._authorize(channel, 'sub', function() {
+        that._send(channel, 'sub', {sub: channel, agg: real_agg});
         _debug("_subscribe", "subscribed to: ", channel, " with aggregator: ", real_agg);
       });
     }
@@ -128,10 +128,12 @@
   
   Iris.prototype._resubscribe = function() {
     for (channel in this._subscriptions) {
-      if (this.hasOwnProperty(channel)) {
+      if (this._subscriptions.hasOwnProperty(channel)) {
         var that = this;
-        this._authorize(channel, function() {
-          that._send(channel, {sub: channel, agg: that._subscriptions[channel].agg});
+        _debug("_resubscribe", "trying to sub to: ", channel);
+        this._authorize(channel, 'sub', function() {
+          _debug("_resubscribe", "subscribing to: ", channel);
+          that._send(channel, 'sub', {sub: channel, agg: that._subscriptions[channel].agg});
         });
       }
     }
@@ -196,16 +198,12 @@
       }
       
       this.__id = data.id;
-      var that = this;
+      this._connected = true;
       
-      _debug("_handle_onmessage", "received my id: ", data.id, " now attempting to authorize");
+      this._resubscribe(); // sub to existing channels
+      this._publish(); // and automagically pub pending messages
       
-      this._authorize('', function() {
-        that._connected = true;
-        
-        that._resubscribe(); // sub to existing channels
-        that._publish(); // and automagically pub pending messages
-      });
+      _debug("_handle_onmessage", "successfully connected with id: ", data.id);
     } else if (data.hasOwnProperty('chan') && data.hasOwnProperty('msg') && this._subscriptions.hasOwnProperty(data.chan)) {
       for (var i = 0; i < this._subscriptions[data.chan].callbacks.length; i++) {
         this._subscriptions[data.chan].callbacks[i](data.msg, data.chan);
@@ -213,12 +211,13 @@
     }
   };
   
-  Iris.prototype._authorize = function(channel, callback) {
-    if (this._auth_tokens[channel] === false) {
+  Iris.prototype._authorize = function(channel, action, callback) {
+    if (!this._connected) {
+      // we couldn't possibly auth; just return (on connect we will take care of defferred actions)
+    } if (this._auth_tokens[channel] && !this._auth_tokens[channel][action]) {
       // failed
-      _debug("_authorize", "attempted call to authorize after already failed!");
-      return;
-    } else if (this._auth_tokens[channel]) {
+      _debug("_authorize", "attempted use of unauthorized resource!");
+    } else if (this._auth_tokens[channel] && this._auth_tokens[channel][action]) {
       if (callback) { callback(); }
     } else if (this._authorizing[channel]) {
       if (callback) { this._authorizing[channel].push(callback); }
@@ -240,9 +239,18 @@
       xhr.onreadystatechange = function() {
         if (xhr.readyState == 4){
           if (xhr.status == 200) {
-            _debug("_authorize", "authorized!");
             var auth = JSON.parse(xhr.responseText);
-            that._auth_tokens[channel] = auth.token;
+            
+            if (!is_object(auth) || (!auth.pub && !auth.sub)) {
+              that._auth_tokens[channel] = {pub: false, sub: false};
+              
+              _debug("_authorize", "auth token invalid/empty!");
+              delete that._authorizing[channel];
+              return;
+            }
+            
+            _debug("_authorize", "authorized:", channel);
+            that._auth_tokens[channel] = auth;
             
             for (var i = 0; i < that._authorizing[channel].length; i++) {
               that._authorizing[channel][i]();
@@ -251,21 +259,29 @@
             delete that._authorizing[channel];
           } else {
             _debug("_authorize", "authorize failed!");
-            that._auth_tokens[channel] = false;
+            that._auth_tokens[channel] = {pub: false, sub: false};
+            delete that._authorizing[channel];
           }
         }
       };
+      
+      _debug("_authorize", "contacting server for auth on channel", channel);
       
       xhr.send('channel=' + channel +'&id=' + this.__id);
     }
   };
   
-  Iris.prototype._send = function(channel, data) {
+  Iris.prototype._send = function(channel, action, data) {
     if (this._endpoint) {
-      data.a = this._auth_tokens[channel];
+      if (this._auth_tokens[channel] && this._auth_tokens[channel][action]) {
+        data.a = this._auth_tokens[channel][action];
+        this.__send(data);
+      } else {
+        _debug("_send", "requested send/action for unauthorized channel:", channel, " and action: ", action);
+      }
+    } else {
+      this.__send(data);
     }
-    
-    this.__send(data);
   };
   
   Iris.prototype.__send = function(data) {
@@ -284,8 +300,12 @@
   }
   
   var is_array = Array.isArray || function(obj) {
-     return toString.call(obj) === '[object Array]';
-   };
+    return toString.call(obj) === '[object Array]';
+  };
+   
+  function is_object(obj) {
+    return obj === Object(obj);
+  }
    
    function _debug() {
      if (window._iris_debug && window.console && (typeof console.log === "function")) {

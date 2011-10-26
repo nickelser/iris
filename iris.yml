@@ -3,7 +3,6 @@ development:
   namespace: development
   log_level: debug
   auth: true
-  secret: "1234"
 
 test: 
   uri: redis://127.0.0.1:6379/0

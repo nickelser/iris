@@ -19,6 +19,7 @@ require 'aggregator'
 require 'client'
 
 RUN_ENV = ENV['IRIS_ENV'] || ENV['RAKE_ENV'] || ENV['RAILS_ENV'] || 'development'
+TOKEN = [Random.new.bytes(32)].pack("m*").delete("\n") # sneaky way to get a nice random base64 string
 
 defaults = {
   uri: "redis://127.0.0.1:6379/0",
@@ -49,55 +50,60 @@ logger.level = CONFIG[:log_level].to_sym || :info
 
 class IrisServer < DaemonSpawn::Base
   def start(args)
-    EventMachine.run do
+    EM.run do
       clients = {}
-      
-      EventMachine::WebSocket.start(host: CONFIG[:host], port: CONFIG[:port], debug: CONFIG[:websockets_debug]) do |ws|
-        ws.onopen do
-          logger.debug "client connected"
-          clients[ws] = Client.new(ws)
-        end
-        
-        ws.onclose do
-          clients[ws].disconnect
-          clients.delete ws
-        end
-        
-        #ws.onerror do |error|
-          # TODO
-        #  if clients.has_key?(ws)
-        #    clients[ws].disconnect
-        #    clients.delete ws
-        #  end
-          #if e.kind_of?(EM::WebSocket::WebSocketError)
-          #  ...
+      # attempt to open a redis connection & set our token
+      # no need for an errback; it will just fail at this point if the connection is invalid
+      # we do this as a sanity check even if authentication is disabled to ensure we can write to redis
+      token_redis = EM::Hiredis.connect(CONFIG[:uri])
+      token_redis.set(namespace + '__iris_token', TOKEN) do
+        EM::WebSocket.start(host: CONFIG[:host], port: CONFIG[:port], debug: CONFIG[:websockets_debug]) do |ws|
+          ws.onopen do
+            logger.debug "client connected"
+            clients[ws] = Client.new(ws)
+          end
+          
+          ws.onclose do
+            clients[ws].disconnect
+            clients.delete ws
+          end
+          
+          #ws.onerror do |error|
+            # TODO
+          #  if clients.has_key?(ws)
+          #    clients[ws].disconnect
+          #    clients.delete ws
+          #  end
+            #if e.kind_of?(EM::WebSocket::WebSocketError)
+            #  ...
+            #end
           #end
-        #end
-        
-        ws.onmessage do |msg|
-          begin
-            msg = JSON.parse(msg)
-            
-            if msg.has_key? 'sub'
-              clients[ws].subscribe(msg['sub'], msg['a'], msg['agg'])
-            elsif msg.has_key?('pub') && msg.has_key?('chan')
-              clients[ws].publish(msg['chan'], msg['pub'], msg['a'])
-            elsif msg.has_key? 'unsub'
-              clients[ws].unsubscribe(msg['unsub'], msg['a'])
+          
+          ws.onmessage do |msg|
+            begin
+              msg = JSON.parse(msg)
+              
+              if msg.has_key? 'sub'
+                clients[ws].subscribe(msg['sub'], msg['a'], msg['agg'])
+              elsif msg.has_key?('pub') && msg.has_key?('chan')
+                clients[ws].publish(msg['chan'], msg['pub'], msg['a'])
+              elsif msg.has_key? 'unsub'
+                clients[ws].unsubscribe(msg['unsub'], msg['a'])
+              end
+            rescue JSON::ParserError
+              # consume these
             end
-          rescue JSON::ParserError
-            # consume these
           end
         end
-      end
       
-      logger.debug "started server"
+        logger.debug "started server"
+      end
     end
   end
   
   def stop
     logger.debug "stopping the server"
-    EventMachine.stop
+    EM.stop
   end
 end
  

@@ -7,7 +7,7 @@ class Client
     @sub = EM::Hiredis.connect(CONFIG[:uri])
     
     @ws = ws
-    @id = HMAC::SHA256.hexdigest(CONFIG[:secret], Time.now.to_i.to_s + (@@id_counter += 1).to_s)[0..16]
+    @id = HMAC::SHA256.hexdigest(TOKEN, Time.now.to_i.to_s + (@@id_counter += 1).to_s)[0..16]
     @channels = {}
     @cached_tokens = {}
     
@@ -32,7 +32,7 @@ class Client
   end
   
   def publish(channel, msg, token)
-    if authorized([channel], token)
+    if authorized(channel, token, 'pub')
       logger.debug "sending message: #{msg}"
       # wrap the message with our client id so we don't publish to ourselves
       @pub.publish(namespace + channel, {'msg' => msg, '__client_id' => @id}.to_json)
@@ -41,7 +41,7 @@ class Client
   
   # subscribe to a channel
   def subscribe(channel, token, aggregator_name='')
-    if authorized(channel, token)
+    if authorized(channel, token, 'sub')
       logger.debug "client #{@id} subscribed to: #{channel}"
       unless channel.empty? || @channels.has_key?(channel)
         @sub.subscribe(namespace + channel)
@@ -51,7 +51,7 @@ class Client
   end
   
   def unsubscribe(channel, token)
-    if authorized(channel, token)
+    if authorized(channel, token, 'sub')
       logger.debug "client(#{@id}) unsubscribed from: #{channel}"
       if @channels.has_key?(channel)
         @sub.unsubscribe(namespace + channel)
@@ -62,12 +62,12 @@ class Client
   
   private
   
-  def authorized(channel, token)
-    CONFIG[:auth] ? (token_for_channel(channel) == token) : true
+  def authorized(channel, token, type)
+    CONFIG[:auth] ? (token_for_channel(channel, type) == token) : true
   end
   
-  def token_for_channel(channel)
-    @cached_tokens[channel] ||= HMAC::SHA256.hexdigest(CONFIG[:secret], "#{channel}:#{@id}")
+  def token_for_channel(channel, type)
+    @cached_tokens[channel] ||= HMAC::SHA256.hexdigest(TOKEN, "#{channel}:#{@id}:#{type}")
   end
   
   def init_sub
