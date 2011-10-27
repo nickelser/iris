@@ -314,8 +314,8 @@
             
             for (i = 0; i < channels_to_be_authorized.length; i++) {
               that._auth_tokens[channels_to_be_authorized[i]] = {pub: false, sub: false};
-              for (i = 0; i < that._authorizing[channels_to_be_authorized[i]].errback.length; i++) {
-                that._authorizing[channels_to_be_authorized[i]].errback[i].call(that, channels_to_be_authorized[i]);
+              for (var j = 0; j < that._authorizing[channels_to_be_authorized[j]].errback.length; j++) {
+                that._authorizing[channels_to_be_authorized[i]].errback[j].call(that, channels_to_be_authorized[i]);
               }
               delete that._authorizing[channels_to_be_authorized[i]];
             }
