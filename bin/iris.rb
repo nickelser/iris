@@ -59,7 +59,6 @@ class IrisServer < DaemonSpawn::Base
       token_redis.set(namespace + '__iris_token', TOKEN) do
         EM::WebSocket.start(host: CONFIG[:host], port: CONFIG[:port], debug: CONFIG[:websockets_debug]) do |ws|
           ws.onopen do
-            logger.debug "client connected"
             clients[ws] = Client.new(ws)
           end
           
@@ -68,23 +67,20 @@ class IrisServer < DaemonSpawn::Base
             clients.delete ws
           end
           
-          #ws.onerror do |error|
-            # TODO
-          #  if clients.has_key?(ws)
-          #    clients[ws].disconnect
-          #    clients.delete ws
-          #  end
+          ws.onerror do |error|
+            logger.error "error: #{error.inspect}"
             #if e.kind_of?(EM::WebSocket::WebSocketError)
             #  ...
             #end
-          #end
+          end
           
           ws.onmessage do |msg|
             begin
               msg = JSON.parse(msg)
+              logger.debug "got msg: #{msg.inspect}"
               
               if msg.has_key? 'sub'
-                clients[ws].subscribe(msg['sub'], msg['a'], msg['agg'])
+                clients[ws].subscribe(msg['sub'], msg['agg'], msg['a'])
               elsif msg.has_key?('pub') && msg.has_key?('chan')
                 clients[ws].publish(msg['chan'], msg['pub'], msg['a'])
               elsif msg.has_key? 'unsub'

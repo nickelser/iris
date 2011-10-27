@@ -9,11 +9,13 @@ class Client
     @ws = ws
     @id = HMAC::SHA256.hexdigest(TOKEN, Time.now.to_i.to_s + (@@id_counter += 1).to_s)[0..16]
     @channels = {}
-    @cached_tokens = {}
+    @cached_tokens = Hash.new { |h, k| h[k] = {} }
     
     # instead of trying to reconnect to redis, which is fragile, just disconnect the user (who will attempt to reconnect)
     @pub.errback { @ws.close_connection }
     @sub.errback { @ws.close_connection }
+    
+    logger.debug "client(#{@id}) connected"
     
     # send out the client's id
     @ws.send({id: @id}.to_json)
@@ -40,12 +42,12 @@ class Client
   end
   
   # subscribe to a channel
-  def subscribe(channel, token, aggregator_name='')
+  def subscribe(channel, aggregator, token)
     if authorized(channel, token, 'sub')
       logger.debug "client #{@id} subscribed to: #{channel}"
       unless channel.empty? || @channels.has_key?(channel)
         @sub.subscribe(namespace + channel)
-        @channels[channel] = Aggregator.new(aggregator_name) # will be pass-through if blank
+        @channels[channel] = Aggregator.new(aggregator) # will be pass-through if blank
       end
     end
   end
@@ -67,7 +69,7 @@ class Client
   end
   
   def token_for_channel(channel, type)
-    @cached_tokens[channel] ||= HMAC::SHA256.hexdigest(TOKEN, "#{channel}:#{@id}:#{type}")
+    @cached_tokens[channel][type] ||= HMAC::SHA256.hexdigest(TOKEN, "#{channel}:#{@id}:#{type}")
   end
   
   def init_sub
