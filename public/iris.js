@@ -18,7 +18,7 @@
   window.WEB_SOCKET_SWF_LOCATION = iris_script_location + "WebSocketMain.swf";
   window.WEB_SOCKET_DEBUG = window._iris_debug;
   window.WEB_SOCKET_SUPPRESS_CROSS_DOMAIN_SWF_ERROR = true;
-  window.WEB_SOCKET_FORCE_FLASH = true;
+  //window.WEB_SOCKET_FORCE_FLASH = true;
   
   window.Iris = function(url, endpoint) {
     var that = this;
