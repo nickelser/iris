@@ -1,17 +1,25 @@
-// iris client code :)
 (function () {
   // just like the ifdefs of yore
   if (window.Iris) { return; }
   
-  window._iris_debug = true;
+  window._iris_debug = false;
+  
+  // get our location for serving the websocket file/swf
+  var iris_script = document.getElementById('iris_script');
+  
+  if (!iris_script) {
+    console.log("error loading iris: you must add id='iris_script' to the script tag for iris");
+    return;
+  }
+  
+  var iris_script_location = iris_script.getAttribute('src').replace('iris.js', '');
   
   // these are needed for web_socket
-  // TODO verify flash version works
-  window.WEB_SOCKET_SWF_LOCATION = "http://localhost:8081/WebSocketMain.swf";
+  window.WEB_SOCKET_SWF_LOCATION = iris_script_location + "WebSocketMain.swf";
   window.WEB_SOCKET_DEBUG = window._iris_debug;
   window.WEB_SOCKET_SUPPRESS_CROSS_DOMAIN_SWF_ERROR = true;
+  window.WEB_SOCKET_FORCE_FLASH = true;
   
-  // TODO: make iris take an object to configure
   window.Iris = function(url, endpoint) {
     var that = this;
     
@@ -23,6 +31,7 @@
     this._endpoint = endpoint;
     
     this._retry_timeout = 1000; // start it at one second, then back off
+    this._loaded_websocket_js = false; // flag for if we async loaded the flash emulation layer
     
     _debug("iris", "iris initialized; url:", url, "endpoint:", endpoint);
     
@@ -108,21 +117,28 @@
   Iris.prototype._open_socket = function() {
     var that = this, ws_transport = null;
     
+    // if possible, use native websockets (moz/websockets). otherwise, fall back to flash
+    if (window.WebSocket) {
+      ws_transport = window.WebSocket;
+    } else if (window.MozWebSocket) {
+      ws_transport = window.MozWebSocket;
+    } else if (!this._loaded_websocket_js) {
+      _debug("_open_socket", "no native websocket implementation found, falling back to flash");
+      $L([iris_script_location + "web_socket.js"], function () {
+        that._loaded_websocket_js = true;
+        that._open_socket();
+      });
+      return;
+    } else {
+      _debug("_open_socket", "no websocket transport found! bailing.");
+      return;
+    }
+    
     this._connected = false;
     this._id = null;
     this._auth_tokens = {};
     this._authorizing = {};
     
-    // TODO: do not load the SWF version unless necessary!
-    if (window.MozWebSocket) {
-      ws_transport = window.MozWebSocket;
-    } else if (window.WebSocket) {
-      ws_transport = window.WebSocket;
-    } else {
-      _debug("_open_socket", "no websocket transport found! bailing.");
-      return;
-    }
-        
     this.__ws = new ws_transport(this._url);
     
     this.__ws.onopen = function(e) { that._handle_onopen(e); };
@@ -133,11 +149,13 @@
     _debug("_open_socket", "websocket + handlers initialized:", this.__ws);
   };
   
+  var CHECK_IF_CONNECTED_TIMEOUT = 3000;
+  
   Iris.prototype._handle_onopen = function(e) {
     this._retry_timeout = 1000; // reset the timeout
     _debug("_handle_onopen", "connection opened");
-    // TODO add timeout to call a function to check whether we've connected or not
-    // and close/restart the connection if necessary
+    var that = this;
+    setTimeout(function() { that._check_if_connected(); }, CHECK_IF_CONNECTED_TIMEOUT);
   };
   
   Iris.prototype._handle_onclose = function(e) {
@@ -148,7 +166,7 @@
     // and delete the existing connection
     delete this.__ws;
     
-    _debug("_handle_onclose", "connection closed, will attempt to reopen in "+this._retry_timeout/1000+"s");
+    _debug("_handle_onclose", "connection closed, will attempt to reopen in",this._retry_timeout/1000+"s");
     
     setTimeout(function() { that._open_socket(); }, this._retry_timeout); // attempt to reconnect
     
@@ -188,6 +206,15 @@
   
   Iris.prototype._handle_onerror = function(e) {
     _debug("_handle_onerror", "internal websockets error! drat:", e);
+  };
+  
+  Iris.prototype._check_if_connected = function() {
+    if (!this._connected) {
+      _debug("_check_if_connected", "not connected! closing and attempting again.");
+      this.__ws.close();
+      delete this.__ws;
+      this._open_socket();
+    }
   };
   
   Iris.prototype._publish = function() {
@@ -313,11 +340,12 @@
             _debug("_authorize", "server returned something other than 200 OK; assuming all channels unauthorized");
             
             for (i = 0; i < channels_to_be_authorized.length; i++) {
-              that._auth_tokens[channels_to_be_authorized[i]] = {pub: false, sub: false};
-              for (var j = 0; j < that._authorizing[channels_to_be_authorized[j]].errback.length; j++) {
-                that._authorizing[channels_to_be_authorized[i]].errback[j].call(that, channels_to_be_authorized[i]);
+              var channel = channels_to_be_authorized[i];
+              that._auth_tokens[channel] = {pub: false, sub: false};
+              for (var j = 0; j < that._authorizing[channel].errback.length; j++) {
+                that._authorizing[channel].errback[j].call(that, channel);
               }
-              delete that._authorizing[channels_to_be_authorized[i]];
+              delete that._authorizing[channel];
             }
           }
         }
@@ -378,7 +406,7 @@
   };
   
   var is_array = Array.isArray || function(obj) {
-    return toString.call(obj) == '[object Array]';
+    return Object.prototype.toString.call(obj) === '[object Array]';
   };
    
   function is_object(obj) {
@@ -386,7 +414,7 @@
   }
   
   function is_string(obj) {
-    return toString.call(obj) == '[object String]';
+    return Object.prototype.toString.call(obj) === '[object String]';
   };
   
   function to_array(obj) {
@@ -407,4 +435,21 @@
       console.log.apply(console, ["iris_debug(" + Array.prototype.slice.call(arguments)[0] + "):"].concat(Array.prototype.slice.call(arguments, 1)));
     }
   }
+  
+  // lazy loading from http://blog.fedecarg.com/2011/07/12/javascript-asynchronous-script-loading-and-lazy-loading/
+  var $L = function(c, d) {
+    for (var b = c.length, e = b, f = function() {
+      if (!(this.readyState && this.readyState !== "complete" && this.readyState !== "loaded")) {
+        this.onload = this.onreadystatechange = null;
+        --e || d();
+      }
+    },
+    g = document.getElementsByTagName("head")[0], i = function(h) {
+      var a = document.createElement("script");
+      a.async = true;
+      a.src = h;
+      a.onload = a.onreadystatechange = f;
+      g.appendChild(a);
+    }; b;) i(c[--b]);
+  };
 })();

@@ -56,6 +56,7 @@ class IrisServer < DaemonSpawn::Base
       # no need for an errback; it will just fail at this point if the connection is invalid
       # we do this as a sanity check even if authentication is disabled to ensure we can write to redis
       token_redis = EM::Hiredis.connect(CONFIG[:uri])
+      token_redis.errback { logger.error "error with redis!" }
       token_redis.set(namespace + '__iris_token', TOKEN) do
         EM::WebSocket.start(host: CONFIG[:host], port: CONFIG[:port], debug: CONFIG[:websockets_debug]) do |ws|
           ws.onopen do
