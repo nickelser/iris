@@ -444,7 +444,7 @@
         --e || d();
       }
     },
-    g = document.getElementsByTagName("head")[0], i = function(h) {
+    g = document.getElementsByTagName("body")[0], i = function(h) {
       var a = document.createElement("script");
       a.async = true;
       a.src = h;
