@@ -1,6 +1,6 @@
 # Iris
 
-Iris is a redis/websockets-based pub/sub server. It is comprised of the server (iris.rb), and the client-side JS.
+Iris is a redis/websockets-based pub/sub server. It is comprised of the server (iris.rb), and the client-side JS. It is pretty awesome.
 
 ## How to use
 
