@@ -14,7 +14,8 @@ Iris is a redis/websockets-based pub/sub server. It is comprised of the server (
 * Write some boss JS code:
 
   ```javascript
-  iris = new Iris("ws://localhost:8080", "nick", "1234")
+  iris = new Iris("ws://localhost:8080", "nick", "1234");
+  
   iris.subscribe(function(data, channel) {
       alert('Just got some data!');
   }, ['channel1', 'channel2']);
